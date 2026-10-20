@@ -1,0 +1,27 @@
+{ "resourceType": "Observation",
+  "status": "final",
+  "category": [{
+    "coding": [{
+      "system": "http://terminology.hl7.org/CodeSystem/observation-category",
+      "code": "survey",
+      "display": "Survey"
+    }]
+  }],
+  "code": {
+    "coding": [{
+      "system": "http://misac.org/physicalActivity/functional",
+      "code": "{{input.activity_code}}",
+      "display": "{{input.activity_display}}"
+    }]
+  },
+  "subject": {
+    "reference": "Patient/{{input.patient_id}}"
+  },
+  "effectiveDateTime": "{{input.measure_time}}",
+  "valueQuantity": {
+    "value": "{{input.value}}",
+    "unit": "{{input.unit}}",
+    "system": "http://unitsofmeasure.org",
+    "code": "{{input.unit_code}}"
+  }
+}

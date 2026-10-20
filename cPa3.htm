@@ -1,0 +1,563 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FHIR Observation Builder</title>
+<style>
+body {
+  max-width: 1000px;
+  margin: 24px auto;
+  padding: 0 16px;
+  font-family: Arial, "Microsoft JhengHei", sans-serif;
+  line-height: 1.6;
+}
+h1 { font-size: 24px; }
+h2 { font-size: 19px; }
+.panel {
+  border: 1px solid #ccc;
+  border-radius: 8px;
+  padding: 16px;
+  margin: 16px 0;
+}
+label { display: block; font-weight: bold; margin-top: 12px; }
+input, select, textarea, button {
+  box-sizing: border-box;
+  width: 100%;
+  padding: 9px;
+  margin-top: 5px;
+  font-size: 15px;
+}
+textarea {
+  min-height: 220px;
+  font-family: Consolas, monospace;
+  white-space: pre;
+}
+button { cursor: pointer; margin-top: 12px; }
+button:disabled { opacity: .55; cursor: wait; }
+.small, #status { font-size: 13px; white-space: pre-wrap; overflow-wrap: anywhere; }
+a { overflow-wrap: anywhere; }
+</style>
+</head>
+<body>
+
+<h1>FHIR Observation 建立工具</h1>
+
+<div class="panel">
+<h2>1. FHIR 設定</h2>
+
+<label for="server">FHIR Server URL</label>
+<input id="server" value="https://hapi.fhir.org/baseR4">
+
+<label for="patient">Patient ID</label>
+<input id="patient"
+ value="7158c01b-32ba-4fbd-a038-201a0a2a4e2a">
+
+<label for="templateUrl">Observation JSON 模板 DocumentReference</label>
+<input id="templateUrl"
+ value="https://hapi.fhir.org/baseR4/DocumentReference/f63bd97f-ed7f-4999-9176-cda263953a7b">
+
+<label for="diffUrl">量測細項 diff.csv DocumentReference</label>
+<input id="diffUrl"
+ value="https://hapi.fhir.org/baseR4/DocumentReference/0e20fa58-1116-4730-97da-820bc2b782f8">
+
+<button id="loadBtn" onclick="loadResources()">
+載入模板與量測項目
+</button>
+<div id="status"></div>
+</div>
+
+<div class="panel">
+<h2>2. 量測資料</h2>
+
+<label for="activity">量測項目</label>
+<select id="activity">
+<option value="">請先載入 diff.csv</option>
+</select>
+
+<div id="itemInfo" class="small"></div>
+
+<label for="value">量測數值</label>
+<input id="value" type="number" step="any"
+ placeholder="請輸入量測數值">
+
+<label for="measureTime">量測時間</label>
+<input id="measureTime" readonly>
+
+<button onclick="updateTime()">更新目前時間</button>
+<button onclick="generateJSON()">
+按鈕 1：產生 Observation JSON
+</button>
+</div>
+
+<div class="panel">
+<h2>3. Observation JSON</h2>
+<p class="small">
+可檢視或編輯 JSON。按鈕 2 會上傳此文字區中的 JSON。
+</p>
+<textarea id="jsonOutput" spellcheck="false"
+ placeholder="Observation JSON"></textarea>
+
+<button id="postBtn" onclick="postObservation()">
+按鈕 2：HTTP POST 上傳
+</button>
+</div>
+
+<div class="panel">
+<h2>4. HTTP 回應結果</h2>
+<textarea id="responseOutput" readonly
+ spellcheck="false" placeholder="FHIR Server 回應"></textarea>
+
+<p>Observation 調閱 URL：</p>
+<div id="readUrl" class="small">尚未上傳</div>
+</div>
+
+<script>
+"use strict";
+
+const $ = id => document.getElementById(id);
+
+let template = null;
+let items = [];
+let selected = null;
+
+function baseURL() {
+  return $("server").value.trim().replace(/\/+$/, "");
+}
+
+function updateTime() {
+  const d = new Date();
+  const pad = n => String(n).padStart(2, "0");
+  const offset = -d.getTimezoneOffset();
+  const sign = offset >= 0 ? "+" : "-";
+
+  $("measureTime").value =
+    d.getFullYear() + "-" +
+    pad(d.getMonth() + 1) + "-" +
+    pad(d.getDate()) + "T" +
+    pad(d.getHours()) + ":" +
+    pad(d.getMinutes()) + ":" +
+    pad(d.getSeconds()) +
+    sign +
+    pad(Math.floor(Math.abs(offset) / 60)) + ":" +
+    pad(Math.abs(offset) % 60);
+}
+
+// 將 Base64 解碼成 UTF-8，支援中文
+function decodeBase64Utf8(data) {
+  const binary = atob(data.replace(/\s/g, ""));
+  const bytes = Uint8Array.from(
+    binary, c => c.charCodeAt(0)
+  );
+
+  return new TextDecoder("utf-8")
+    .decode(bytes)
+    .replace(/^\uFEFF/, "");
+}
+
+// 讀取 DocumentReference，取得指定格式的 attachment.data
+async function readAttachment(url, format) {
+  const res = await fetch(url, {
+    headers: { Accept: "application/fhir+json" }
+  });
+
+  if (!res.ok) {
+    throw new Error(
+      "DocumentReference 讀取失敗：" +
+      res.status + " " + res.statusText + "\n" + url
+    );
+  }
+
+  const doc = await res.json();
+
+  if (doc.resourceType !== "DocumentReference") {
+    throw new Error("回應不是 DocumentReference。");
+  }
+
+  const attachments = (doc.content || [])
+    .map(x => x.attachment)
+    .filter(x => x && x.data);
+
+  if (!attachments.length) {
+    throw new Error(
+      "找不到 content[].attachment.data。"
+    );
+  }
+
+  const attachment = attachments.find(x =>
+    (x.contentType || "").toLowerCase()
+      .includes(format.toLowerCase())
+  ) || attachments[0];
+
+  return decodeBase64Utf8(attachment.data);
+}
+
+// CSV 解析器：支援雙引號、逗號及欄位內換行
+function parseCSV(text) {
+  text = text.replace(/^\uFEFF/, "");
+
+  const rows = [];
+  let row = [];
+  let field = "";
+  let quoted = false;
+
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+
+    if (quoted) {
+      if (c === '"') {
+        if (text[i + 1] === '"') {
+          field += '"';
+          i++;
+        } else {
+          quoted = false;
+        }
+      } else {
+        field += c;
+      }
+    } else if (c === '"' && field === "") {
+      quoted = true;
+    } else if (c === ",") {
+      row.push(field);
+      field = "";
+    } else if (c === "\n") {
+      row.push(field);
+      rows.push(row);
+      row = [];
+      field = "";
+    } else if (c !== "\r") {
+      field += c;
+    }
+  }
+
+  if (field !== "" || row.length) {
+    row.push(field);
+    rows.push(row);
+  }
+
+  return rows.filter(r =>
+    r.some(v => v.trim() !== "")
+  );
+}
+
+function norm(s) {
+  return String(s || "").trim().toLowerCase();
+}
+
+// 以實際 CSV 標頭尋找欄位，支援多種命名方式
+function findColumn(headers, aliases, suffixes) {
+  let i = headers.findIndex(h => aliases.includes(h));
+  if (i >= 0) return i;
+
+  return headers.findIndex(h =>
+    suffixes.some(s => h.endsWith(s))
+  );
+}
+
+function parseDiff(text) {
+  const rows = parseCSV(text);
+
+  if (rows.length < 2) {
+    throw new Error("diff.csv 沒有資料列。");
+  }
+
+  const headers = rows[0].map(norm);
+
+  const idx = {
+    code: findColumn(headers,
+      ["code", "activity_code", "localcode"],
+      ["_code"]),
+    system: findColumn(headers,
+      ["system", "codesystem"],
+      ["_system"]),
+    display: findColumn(headers,
+      ["display", "display_en", "activity_display_en",
+       "localdisplay", "local_display"],
+      ["_display_en"]),
+    zh: findColumn(headers,
+      ["display_zh", "activity_display_zh",
+       "localdisplay_zh", "local_display_zh"],
+      ["_display_zh"]),
+    unit: findColumn(headers,
+      ["unit", "display_unit"],
+      ["_unit"]),
+    ucum: findColumn(headers,
+      ["ucum", "ucum_code", "unit_code"],
+      ["_ucum", "_ucum_code", "_unit_code"]),
+    type: findColumn(headers,
+      ["type", "kind"],
+      ["_type"])
+  };
+
+  if (idx.code < 0) {
+    throw new Error(
+      "CSV 找不到代碼欄位。\n標頭：" +
+      headers.join(", ")
+    );
+  }
+
+  return rows.slice(1).map(r => ({
+    code: (r[idx.code] || "").trim(),
+    system: idx.system >= 0
+      ? (r[idx.system] || "").trim() : "",
+    display: idx.display >= 0
+      ? (r[idx.display] || "").trim() : "",
+    zh: idx.zh >= 0
+      ? (r[idx.zh] || "").trim() : "",
+    unit: idx.unit >= 0
+      ? (r[idx.unit] || "").trim() : "",
+    ucum: idx.ucum >= 0
+      ? (r[idx.ucum] || "").trim() : "",
+    type: idx.type >= 0
+      ? (r[idx.type] || "").trim() : ""
+  })).filter(x => x.code);
+}
+
+async function loadResources() {
+  $("loadBtn").disabled = true;
+  $("status").textContent = "正在載入文件...";
+  $("activity").replaceChildren();
+  template = null;
+  items = [];
+  selected = null;
+
+  try {
+    const [jsonText, csvText] = await Promise.all([
+      readAttachment($("templateUrl").value.trim(), "json"),
+      readAttachment($("diffUrl").value.trim(), "csv")
+    ]);
+
+    template = JSON.parse(jsonText);
+
+    if (template.resourceType !== "Observation") {
+      throw new Error(
+        "模板 resourceType 不是 Observation。"
+      );
+    }
+
+    items = parseDiff(csvText);
+
+    if (!items.length) {
+      throw new Error("diff.csv 沒有可選的量測項目。");
+    }
+
+    $("activity").add(new Option("請選擇量測項目", ""));
+
+    items.forEach((item, i) => {
+      const name = item.display || item.code;
+      const text = name +
+        (item.zh ? " / " + item.zh : "") +
+        (item.unit ? " (" + item.unit + ")" : "");
+
+      $("activity").add(new Option(text, String(i)));
+    });
+
+    $("status").textContent =
+      "載入成功。\n" +
+      "模板：Observation\n" +
+      "量測細項：" + items.length + " 筆\n" +
+      "CSV 標頭：" + parseCSV(csvText)[0].join(", ");
+
+  } catch (e) {
+    $("status").textContent =
+      "載入失敗：\n" + e.message +
+      "\n請檢查 URL、attachment.data、網路及 CORS 設定。";
+  } finally {
+    $("loadBtn").disabled = false;
+  }
+}
+
+$("activity").addEventListener("change", () => {
+  const i = $("activity").value;
+  selected = i === "" ? null : items[Number(i)];
+
+  $("itemInfo").textContent = selected
+    ? "Code: " + selected.code +
+      "\nSystem: " + (selected.system || "(模板原有設定)") +
+      "\nUnit: " + selected.unit +
+      "\nUCUM: " + selected.ucum
+    : "";
+});
+
+// 取代模板內的 {{input.xxx}} 佔位符
+function replacePlaceholders(value, input) {
+  if (typeof value === "string") {
+    return value.replace(
+      /\{\{\s*input\.([a-zA-Z0-9_]+)\s*\}\}/g,
+      (match, key) =>
+        Object.prototype.hasOwnProperty.call(input, key)
+          ? String(input[key])
+          : match
+    );
+  }
+
+  if (Array.isArray(value)) {
+    return value.map(v => replacePlaceholders(v, input));
+  }
+
+  if (value && typeof value === "object") {
+    const result = {};
+    Object.keys(value).forEach(k => {
+      result[k] = replacePlaceholders(value[k], input);
+    });
+    return result;
+  }
+
+  return value;
+}
+
+function generateJSON() {
+  try {
+    if (!template) throw new Error("請先載入模板。");
+    if (!selected) throw new Error("請選擇量測項目。");
+
+    const raw = $("value").value.trim();
+    if (raw === "" || !Number.isFinite(Number(raw))) {
+      throw new Error("請輸入有效數值。");
+    }
+
+    const patientId = $("patient").value.trim();
+    if (!patientId) throw new Error("Patient ID 不可空白。");
+
+    updateTime();
+
+    const input = {
+      patient_id: patientId,
+      measure_time: $("measureTime").value,
+      value: Number(raw)
+    };
+
+    const obs = replacePlaceholders(
+      JSON.parse(JSON.stringify(template)), input
+    );
+
+    obs.resourceType = "Observation";
+    obs.status = obs.status || "final";
+    obs.subject = { reference: "Patient/" + patientId };
+    obs.effectiveDateTime = input.measure_time;
+
+    // 使用 CSV 量測代碼，保留模板的其他設定
+    if (!obs.code) obs.code = { coding: [] };
+    if (!Array.isArray(obs.code.coding)) {
+      obs.code.coding = [];
+    }
+
+    if (!obs.code.coding.length) {
+      obs.code.coding.push({});
+    }
+
+    const coding = obs.code.coding[0];
+    coding.code = selected.code;
+
+    if (selected.system) coding.system = selected.system;
+    if (selected.display) coding.display = selected.display;
+
+    if (selected.zh) {
+      coding.display = selected.display
+        ? selected.display + " / " + selected.zh
+        : selected.zh;
+    }
+
+    // 數值與單位
+    obs.valueQuantity = {
+      value: Number(raw),
+      unit: selected.unit || selected.ucum,
+      system: "http://unitsofmeasure.org",
+      code: selected.ucum || selected.unit
+    };
+
+    // 新建資源不攜帶既有伺服器指派 ID
+    delete obs.id;
+    delete obs.meta;
+
+    $("jsonOutput").value = JSON.stringify(obs, null, 2);
+    $("responseOutput").value = "";
+    $("readUrl").textContent = "尚未上傳";
+
+  } catch (e) {
+    alert("產生 JSON 失敗：\n" + e.message);
+  }
+}
+
+async function postObservation() {
+  $("postBtn").disabled = true;
+  $("responseOutput").value = "正在上傳...";
+
+  try {
+    const raw = $("jsonOutput").value.trim();
+    if (!raw) throw new Error("請先產生 JSON。");
+
+    const obs = JSON.parse(raw);
+
+    if (obs.resourceType !== "Observation") {
+      throw new Error("resourceType 必須是 Observation。");
+    }
+
+    const endpoint = baseURL() + "/Observation";
+
+    const res = await fetch(endpoint, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/fhir+json",
+        "Accept": "application/fhir+json"
+      },
+      body: JSON.stringify(obs)
+    });
+
+    const text = await res.text();
+    let body;
+
+    try {
+      body = JSON.parse(text);
+      $("responseOutput").value =
+        JSON.stringify(body, null, 2);
+    } catch (_) {
+      $("responseOutput").value = text;
+    }
+
+    if (!res.ok) {
+      throw new Error(
+        "HTTP " + res.status + " " + res.statusText
+      );
+    }
+
+    // 先嘗試從 Location 取得伺服器資源位置
+    const location = res.headers.get("Location");
+    let url = "";
+
+    if (location) {
+      url = new URL(location, endpoint).href;
+    } else if (body && body.id) {
+      url = endpoint + "/" + encodeURIComponent(body.id);
+    }
+
+    if (url) {
+      const a = document.createElement("a");
+      a.href = url;
+      a.target = "_blank";
+      a.rel = "noopener noreferrer";
+      a.textContent = url;
+      $("readUrl").replaceChildren(a);
+    } else {
+      $("readUrl").textContent =
+        "HTTP 成功，但回應未提供可確認的資源 ID 或 Location。";
+    }
+
+    $("responseOutput").value =
+      "HTTP " + res.status + " " + res.statusText +
+      "\n\n" + $("responseOutput").value;
+
+  } catch (e) {
+    $("responseOutput").value +=
+      "\n\n上傳失敗：" + e.message;
+  } finally {
+    $("postBtn").disabled = false;
+  }
+}
+
+updateTime();
+</script>
+</body>
+</html>
+
+

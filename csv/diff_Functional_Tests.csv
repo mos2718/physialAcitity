@@ -1,0 +1,7 @@
+﻿activity_code,activity_display_en,activity_display_zh,unit,unit_code
+test-5xsts,Five Times Sit-to-Stand,五次起坐測試,s,s
+test-tug,Timed Up and Go (TUG),計時起走測試（TUG）,s,s
+test-grip-strength,Grip strength,握力,kg,kg
+test-single-leg-stance,Single-leg stance,單腳站立平衡,s,s
+test-gait-speed,Gait speed,步行速度,m/s,m/s
+test-walk-distance,Walk distance,步行距離,m,m

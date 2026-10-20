@@ -1,0 +1,271 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FHIR DocumentReference 產生器</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 20px auto;
+            padding: 0 20px;
+            color: #333;
+        }
+        h2 {
+            border-bottom: 2px solid #0056b3;
+            padding-bottom: 8px;
+            color: #0056b3;
+        }
+        .form-group {
+            margin-bottom: 15px;
+        }
+        label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: bold;
+        }
+        input[type="text"], select, input[type="file"] {
+            width: 100%;
+            padding: 8px;
+            box-sizing: border-box;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+        }
+        .row {
+            display: flex;
+            gap: 15px;
+        }
+        .row .form-group {
+            flex: 1;
+        }
+        button {
+            background-color: #0056b3;
+            color: white;
+            padding: 10px 20px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 16px;
+            width: 100%;
+        }
+        button:hover {
+            background-color: #003d80;
+        }
+        .result-box {
+            margin-top: 20px;
+            padding: 15px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            background-color: #f9f9f9;
+        }
+        .success-url {
+            margin-top: 10px;
+            padding: 10px;
+            background-color: #e6f4ea;
+            border: 1px solid #b7e1cd;
+            border-radius: 4px;
+            word-break: break-all;
+        }
+        pre {
+            background-color: #272822;
+            color: #f8f8f2;
+            padding: 10px;
+            border-radius: 4px;
+            overflow-x: auto;
+            max-height: 300px;
+        }
+    </style>
+</head>
+<body>
+
+    <h2>FHIR DocumentReference 產生器與上傳工具</h2>
+
+    <form id="fhirForm">
+        <div class="form-group">
+            <label for="docId">DocumentReference ID (自動產生 UUID):</label>
+            <input type="text" id="docId" readonly>
+        </div>
+
+        <div class="row">
+            <div class="form-group">
+                <label for="docCategory">文件類別 (Category):</label>
+                <input type="text" id="docCategory" value="Clinical Note" placeholder="例如: Clinical Note, Report">
+            </div>
+            <div class="form-group">
+                <label for="docVersion">文件版本 (Version):</label>
+                <input type="text" id="docVersion" value="1.0" placeholder="例如: 1.0">
+            </div>
+        </div>
+
+        <div class="row">
+            <div class="form-group">
+                <label for="formatSelect">快速選擇格式 (Format):</label>
+                <select id="formatSelect" onchange="syncFormatInput()">
+                    <option value="">-- 請選擇或手動輸入 --</option>
+                    <option value="application/markdown">MD 檔 (application/markdown)</option>
+                    <option value="application/json">JSON 檔 (application/json)</option>
+                    <option value="text/csv">CSV 檔 (text/csv)</option>
+                    <option value="application/pdf">PDF 檔 (application/pdf)</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label for="formatInput">文件 MIME 格式 (可自訂):</label>
+                <input type="text" id="formatInput" placeholder="例如: application/pdf">
+            </div>
+        </div>
+
+        <div class="form-group">
+            <label for="fileInput">選擇檔案 (自動轉為 Base64):</label>
+            <input type="file" id="fileInput" required>
+        </div>
+
+        <button type="button" onclick="submitFHIRDocument()">產生並 PUT 至 FHIR Server</button>
+    </form>
+
+    <div id="resultArea" class="result-box" style="display: none;">
+        <h3>執行結果</h3>
+        <div id="urlContainer" class="success-url" style="display: none;">
+            <strong>調閱 URL：</strong><br>
+            <a id="fhirUrl" href="#" target="_blank"></a>
+        </div>
+        <h4>伺服器回應 (Response):</h4>
+        <pre id="responseJson"></pre>
+    </div>
+
+    <script>
+        const FHIR_BASE_URL = "https://hapi.fhir.org/baseR4";
+        const PRACTITIONER_ID = "d909fc39-0200-410a-a1ad-f1f87a916b46";
+        const ORGANIZATION_ID = "b3bf1db5-e176-4a8d-b0e6-7bff291894b0";
+
+        // 頁面載入時自動產生 UUID
+        window.onload = function() {
+            document.getElementById('docId').value = generateUUID();
+        };
+
+        // 標準 UUID v4 產生器
+        function generateUUID() {
+            // 優先使用 Web Crypto API 原生功能
+            if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+                return crypto.randomUUID();
+            }
+            // 回退防護：標準 UUID v4 格式
+            return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+                const r = Math.random() * 16 | 0;
+                const v = c === 'x' ? r : (r & 0x3 | 0x8);
+                return v.toString(16);
+            });
+        }
+
+        // 下拉選單同步文字框
+        function syncFormatInput() {
+            const selectValue = document.getElementById('formatSelect').value;
+            if (selectValue) {
+                document.getElementById('formatInput').value = selectValue;
+            }
+        }
+
+        // 將檔案轉換為 Base64 字串
+        function fileToBase64(file) {
+            return new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.readAsDataURL(file);
+                reader.onload = () => {
+                    const base64String = reader.result.split(',')[1];
+                    resolve(base64String);
+                };
+                reader.onerror = error => reject(error);
+            });
+        }
+
+        // 主要提交函式
+        async function submitFHIRDocument() {
+            const docId = document.getElementById('docId').value;
+            const category = document.getElementById('docCategory').value;
+            const version = document.getElementById('docVersion').value;
+            const mimeType = document.getElementById('formatInput').value || "application/octet-stream";
+            const fileInput = document.getElementById('fileInput');
+
+            if (fileInput.files.length === 0) {
+                alert("請先選擇要上傳的檔案！");
+                return;
+            }
+
+            const file = fileInput.files[0];
+            const nowISO = new Date().toISOString();
+
+            try {
+                // 1. 讀取並轉換檔案至 Base64
+                const base64Data = await fileToBase64(file);
+
+                // 2. 組裝 FHIR DocumentReference Resource
+                const documentReference = {
+                    "resourceType": "DocumentReference",
+                    "id": docId,
+                    "status": "current",
+                    "docStatus": "final",
+                    "category": [
+                        {
+                            "text": category
+                        }
+                    ],
+                    "date": nowISO,
+                    "author": [
+                        {
+                            "reference": `Practitioner/${PRACTITIONER_ID}`
+                        }
+                    ],
+                    "custodian": {
+                        "reference": `Organization/${ORGANIZATION_ID}`
+                    },
+                    "content": [
+                        {
+                            "attachment": {
+                                "contentType": mimeType,
+                                "data": base64Data,
+                                "title": file.name,
+                                "creation": nowISO
+                            },
+                            "format": {
+                                "display": `Version ${version}`
+                            }
+                        }
+                    ]
+                };
+
+                // 3. 發送 HTTP PUT 請求
+                const targetUrl = `${FHIR_BASE_URL}/DocumentReference/${docId}`;
+                const response = await fetch(targetUrl, {
+                    method: "PUT",
+                    headers: {
+                        "Content-Type": "application/fhir+json"
+                    },
+                    body: JSON.stringify(documentReference)
+                });
+
+                const responseData = await response.json();
+
+                // 4. 顯示結果
+                document.getElementById('resultArea').style.display = 'block';
+                document.getElementById('responseJson').textContent = JSON.stringify(responseData, null, 2);
+
+                if (response.ok || response.status === 200 || response.status === 201) {
+                    const urlContainer = document.getElementById('urlContainer');
+                    const fhirUrlAnchor = document.getElementById('fhirUrl');
+                    
+                    fhirUrlAnchor.href = targetUrl;
+                    fhirUrlAnchor.textContent = targetUrl;
+                    urlContainer.style.display = 'block';
+                } else {
+                    document.getElementById('urlContainer').style.display = 'none';
+                    alert(`上傳失敗，HTTP 狀態碼: ${response.status}`);
+                }
+
+            } catch (error) {
+                console.error("發生錯誤:", error);
+                alert("處理過程中發生錯誤，請檢視 Console 紀錄。");
+            }
+        }
+    </script>
+</body>
+</html>

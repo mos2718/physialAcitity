@@ -1,0 +1,7 @@
+﻿activity_group,activity_code,activity_display_en,activity_display_zh,result_code,result_display_en,result_display_zh,value,unit,unit_system,unit_code,value_kind,definition,notes
+functional-test,test-5xsts,Five Times Sit-to-Stand,五次起坐測試,numeric_value,Measured numeric value,數值觀察結果,,s,http://unitsofmeasure.org,s,quantity,完成五次起立坐下所需總時間。,記錄椅高、扶手、測試指示及輔具。
+functional-test,test-tug,Timed Up and Go (TUG),計時起走測試（TUG）,numeric_value,Measured numeric value,數值觀察結果,,s,http://unitsofmeasure.org,s,quantity,完成起立、步行、轉身、返回及坐下所需總時間。,記錄測試距離、輔具及測試條件。
+functional-test,test-grip-strength,Grip strength,握力,numeric_value,Measured numeric value,數值觀察結果,,kg,http://unitsofmeasure.org,kg,quantity,握力測量值。,記錄左右手、儀器、姿勢與測量次數。
+functional-test,test-single-leg-stance,Single-leg stance,單腳站立平衡,numeric_value,Measured numeric value,數值觀察結果,,s,http://unitsofmeasure.org,s,quantity,安全條件下單腳站立的持續時間。,記錄左／右側及是否允許支撐。
+functional-test,test-gait-speed,Gait speed,步行速度,numeric_value,Measured numeric value,數值觀察結果,,m/s,http://unitsofmeasure.org,m/s,quantity,指定測試距離中的步行速度。,記錄測試距離、起步方式、輔具及測量方法。
+functional-test,test-walk-distance,Walk distance,步行距離,numeric_value,Measured numeric value,數值觀察結果,,m,http://unitsofmeasure.org,m,quantity,指定時間或測試 protocol 下完成的步行距離。,需記錄測試時間範圍。

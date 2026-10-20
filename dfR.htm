@@ -1,0 +1,209 @@
+
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FHIR DocumentReference 調閱工具</title>
+
+<style>
+body {
+  font-family: Arial, sans-serif;
+  max-width: 900px;
+  margin: 20px auto;
+  padding: 12px;
+}
+label {
+  display: block;
+  margin-top: 12px;
+}
+input, button, textarea {
+  box-sizing: border-box;
+  width: 100%;
+  padding: 8px;
+  margin-top: 5px;
+}
+button {
+  cursor: pointer;
+  margin: 12px 0;
+}
+textarea {
+  height: 300px;
+  font-family: monospace;
+  white-space: pre-wrap;
+}
+pre {
+  background: #f2f2f2;
+  padding: 12px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+</style>
+</head>
+
+<body>
+
+<h2>FHIR DocumentReference 調閱工具</h2>
+
+<label>DocumentReference URL</label>
+<input
+  id="url"
+  placeholder="https://hapi.fhir.org/baseR4/DocumentReference/UUID"
+  value="https://hapi.fhir.org/baseR4/DocumentReference/"
+>
+
+<button onclick="readDocument()">調閱 DocumentReference</button>
+
+<h3>調閱結果</h3>
+<pre id="result">尚未調閱</pre>
+
+<h3>文件內容</h3>
+<p id="fileInfo">尚未取得文件</p>
+
+<textarea id="content" placeholder="解碼後的文字內容將顯示於此"></textarea>
+
+<script>
+async function readDocument() {
+  const url = document.getElementById("url").value.trim();
+  const result = document.getElementById("result");
+  const content = document.getElementById("content");
+  const fileInfo = document.getElementById("fileInfo");
+
+  result.textContent = "正在調閱...";
+  content.value = "";
+  fileInfo.textContent = "";
+
+  try {
+    if (!url) {
+      throw new Error("請輸入 DocumentReference URL。");
+    }
+
+    // 1. GET DocumentReference
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        "Accept": "application/fhir+json"
+      }
+    });
+
+    const responseText = await response.text();
+
+    if (!response.ok) {
+      throw new Error(
+        "HTTP " + response.status + "\n" + responseText
+      );
+    }
+
+    const doc = JSON.parse(responseText);
+
+    if (doc.resourceType !== "DocumentReference") {
+      throw new Error("取得的資料不是 DocumentReference Resource。");
+    }
+
+    // 2. 顯示 DocumentReference JSON
+    result.textContent = JSON.stringify(doc, null, 2);
+
+    // 3. 取得所有附件
+    const attachments = [];
+
+    (doc.content || []).forEach(function(item, index) {
+      if (item.attachment) {
+        attachments.push({
+          index: index,
+          attachment: item.attachment
+        });
+      }
+    });
+
+    if (attachments.length === 0) {
+      fileInfo.textContent = "此 DocumentReference 沒有附件。";
+      return;
+    }
+
+    const textTypes = [
+      "text/plain",
+      "text/markdown",
+      "text/csv",
+      "application/json",
+      "application/xml",
+      "text/xml",
+      "text/html"
+    ];
+
+    const output = [];
+
+    attachments.forEach(function(item) {
+      const attachment = item.attachment;
+      const type = (attachment.contentType || "")
+        .split(";")[0]
+        .trim()
+        .toLowerCase();
+
+      const title = attachment.title || "未命名附件";
+
+      if (!attachment.data) {
+        output.push(
+          "附件 " + (item.index + 1) + "：" + title +
+          "\n沒有內嵌 data，可能使用 attachment.url。"
+        );
+        return;
+      }
+
+      // 4. 只解碼文字格式
+      const isText =
+        textTypes.includes(type) ||
+        type.startsWith("text/") ||
+        type.endsWith("+json") ||
+        type.endsWith("+xml");
+
+      if (!isText) {
+        output.push(
+          "附件 " + (item.index + 1) + "：" + title +
+          "\n格式：" + (type || "未知") +
+          "\n此格式不視為一般文字，未解碼顯示。"
+        );
+        return;
+      }
+
+      try {
+        // Base64 -> bytes -> UTF-8 text
+        const binary = atob(attachment.data);
+        const bytes = new Uint8Array(binary.length);
+
+        for (let i = 0; i < binary.length; i++) {
+          bytes[i] = binary.charCodeAt(i);
+        }
+
+        const decodedText = new TextDecoder("utf-8", {
+          fatal: true
+        }).decode(bytes);
+
+        output.push(
+          "===== 附件 " + (item.index + 1) + " =====" +
+          "\n檔名：" + title +
+          "\nContent-Type：" + type +
+          "\n\n" + decodedText
+        );
+
+      } catch (e) {
+        output.push(
+          "附件 " + (item.index + 1) + "：" + title +
+          "\n無法以 UTF-8 解碼。請確認檔案編碼是否為 UTF-8。"
+        );
+      }
+    });
+
+    fileInfo.textContent =
+      "附件數量：" + attachments.length;
+
+    content.value = output.join("\n\n");
+
+  } catch (error) {
+    result.textContent = "調閱失敗：\n" + error.message;
+    fileInfo.textContent = "無法取得文件內容。";
+  }
+}
+</script>
+
+</body>
+</html>
